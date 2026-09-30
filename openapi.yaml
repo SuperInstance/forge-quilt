@@ -1,0 +1,577 @@
+openapi: 3.1.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The Quilt cell kernel, as an API.
+#
+# WHY THIS DOCUMENT EXISTS
+# The fleet's polyformalism claim is currently: "the same kernel, hand-written in N
+# languages, kept in sync by discipline, verified by a canary." That is five
+# synchronisation hazards wearing one claim.
+#
+# If the kernel is SPECIFIED rather than IMPLEMENTED, the ports become build
+# artifacts. The canary does not stop being the check — it stops being the *only*
+# thing standing between the ports and drift. It becomes a field in the spec,
+# inherited by every generated surface, and a failure to reproduce it is a build
+# error rather than something a human has to remember.
+#
+# This is the input Cloudflare Forge takes. Everything here is chosen so that a
+# generator can consume it: named schemas, no polymorphism in the wire format,
+# explicit ternaries, and a canary that a generator can emit into every language.
+# ─────────────────────────────────────────────────────────────────────────────
+
+info:
+  title: Quilt Cell Kernel
+  version: "1.0.0"
+  description: |
+    A cell is the irreducible unit. It moves between three states, it receives
+    bottles, and every interaction conserves gamma + eta = C.
+
+    Six opcodes form the proved core: BIND, LINK, EFFECT, VIEW, TICK, FORGET.
+    Five more are adopted rather than proved, and are marked as such in the
+    operation descriptions. The two ecosystems this fleet keeps separate — the
+    24-repo polyformalism substrate and the typed/cloud runtimes — differ in which
+    opcodes they carry, and the difference is expressed as a *flavour* on the
+    same spec rather than as two specs.
+
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: https://api.superinstance.dev/v1
+    description: the live fleet
+  - url: http://127.0.0.1:8787/v1
+    description: a local quilt
+
+tags:
+  - name: cells
+    description: the cell lifecycle
+  - name: graph
+    description: BIND and LINK over a cell graph
+  - name: witness
+    description: the receipt chain
+  - name: integrity
+    description: the polyformalism contract
+
+paths:
+  /cells:
+    get:
+      tags: [cells]
+      operationId: listCells
+      summary: Every cell in the quilt, including retired ones.
+      description: |
+        FORGET retires a cell; it never deletes it. Retired cells stay addressable
+        and stay in the witness chain, because the history is the point.
+      parameters:
+        - $ref: '#/components/parameters/Flavour'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: the cell census
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flavour, cells]
+                properties:
+                  flavour: { $ref: '#/components/schemas/Flavour' }
+                  cells:
+                    type: array
+                    items: { $ref: '#/components/schemas/Cell' }
+
+    post:
+      tags: [cells]
+      operationId: bindCell
+      summary: BIND — create a cell in the active set.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BindRequest' }
+      responses:
+        "201":
+          description: the cell was created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cell' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /cells/{cellId}:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    get:
+      tags: [cells]
+      operationId: inspectCell
+      summary: INSPECT — the cell's current state.
+      responses:
+        "200":
+          description: the cell
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cell' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /cells/{cellId}/bottles:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    get:
+      tags: [cells]
+      operationId: listBottles
+      summary: Every bottle this cell has received, oldest first.
+      responses:
+        "200":
+          description: the bottle log
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cellId, bottles]
+                properties:
+                  cellId: { $ref: '#/components/schemas/CellId' }
+                  bottles:
+                    type: array
+                    items: { $ref: '#/components/schemas/Bottle' }
+
+    post:
+      tags: [cells]
+      operationId: receiveBottle
+      summary: RECEIVE — deliver a bottle, conserving gamma + eta = C.
+      description: |
+        The conservation check is the whole point. If gamma + eta leaves the
+        representable range {-1, 0, +1} the bottle is REFUSED and the cell is
+        unchanged. A refusal is a receipt, not a silence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Bottle' }
+      responses:
+        "202":
+          description: accepted and applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Receipt' }
+        "422":
+          description: |
+            CONSERVATION VIOLATION. gamma + eta is outside {-1, 0, +1}.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Refusal' }
+
+  /cells/{cellId}/state:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    patch:
+      tags: [cells]
+      operationId: transitionCell
+      summary: Move a cell between Born, Active, Suspended and Terminated.
+      description: |
+        Suspended buffers bottles without applying them. Terminated refuses them.
+        Every transition is itself a bottle, which is what makes the chain complete —
+        there is no path that changes state without leaving a receipt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: { $ref: '#/components/schemas/LifecycleState' }
+      responses:
+        "200":
+          description: the transition receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Receipt' }
+        "409": { $ref: '#/components/responses/Conflict' }
+        "422": { $ref: '#/components/responses/Refused' }
+
+  /graph/links:
+    post:
+      tags: [graph]
+      operationId: linkCells
+      summary: LINK — connect two existing cells. A link is directed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LinkRequest' }
+      responses:
+        "201":
+          description: the link was created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Link' }
+
+  /graph/tick:
+    post:
+      tags: [graph]
+      operationId: tick
+      summary: TICK — advance the clock by one step.
+      description: |
+        State changes only here. An agent that is not reached does not advance, which
+        is what makes a bottle sequence replayable.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TickRequest' }
+      responses:
+        "200":
+          description: the post-tick census
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Census' }
+
+  /witness/chain:
+    get:
+      tags: [witness]
+      operationId: getWitnessChain
+      summary: The append-only receipt chain.
+      description: |
+        A linear hash chain. Editing a historical receipt invalidates every hash
+        after it. It does NOT prove the writer did not rewrite the whole chain —
+        anchor the head externally for that. See `getAnchoredHead`.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: the chain
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [head, entries]
+                properties:
+                  head: { $ref: '#/components/schemas/Hash' }
+                  entries:
+                    type: array
+                    items: { $ref: '#/components/schemas/Receipt' }
+
+  /witness/verify:
+    post:
+      tags: [witness]
+      operationId: verifyWitnessChain
+      summary: Verify the chain and report the FIRST broken entry.
+      description: |
+        Returns the id of the first receipt that fails to chain, or null. The
+        "first" matters: an auditor wants the earliest break, not a count of them.
+      responses:
+        "200":
+          description: the verdict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Verdict' }
+
+  /witness/anchored-head:
+    get:
+      tags: [witness]
+      operationId: getAnchoredHead
+      summary: The externally anchored head, if one exists.
+      description: |
+        Without this, a chain detects accidental corruption and nothing else. An
+        adversary who controls the current database can rewrite the whole chain and
+        leave it internally consistent.
+      responses:
+        "200":
+          description: the anchored head
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnchoredHead' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /integrity/canary:
+    get:
+      tags: [integrity]
+      operationId: getCanary
+      summary: The polyformalism canary this substrate is pinned to.
+      description: |
+        FNV-1a 64 over the UTF-8 bytes of the fixture. Every substrate in the fleet
+        must reproduce this. The accent is load-bearing: the unaccented fixture is a
+        DIFFERENT test that looks identical.
+
+        Note the trap this exists to catch: FNV-1a is a CONFORMANCE hash. It is the
+        right choice for proving two ports agree, and the wrong choice for tamper
+        evidence. Anything integrity-critical here uses BLAKE2b-256 and says so.
+      responses:
+        "200":
+          description: the canary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Canary' }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# components
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+
+  parameters:
+    CellId:
+      name: cellId
+      in: path
+      required: true
+      description: the cell's stable identifier. Retired cells keep theirs.
+      schema: { $ref: '#/components/schemas/CellId' }
+
+    Flavour:
+      name: flavour
+      in: query
+      required: false
+      description: |
+        Which ecosystem. The two the fleet keeps separate are `polyformalism`
+        (6 opcodes, C99 substrate) and `runtime` (typed and cloud cell kinds).
+      schema: { $ref: '#/components/schemas/Flavour' }
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: how many entries to return. Capped server-side.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+
+  schemas:
+
+    Ternary:
+      type: integer
+      enum: [-1, 0, 1]
+      description: |
+        The only state values a cell can hold. An integer outside this set is
+        not a state and must be refused rather than clamped — clamping is how a
+        conservation law quietly stops conserving.
+      example: 0
+
+    Hash:
+      type: string
+      pattern: '^[0-9a-f]{16}$'
+      description: 64-bit digest, lowercase hex, zero-padded to 16 characters.
+      example: "024a555471370b18d"
+
+    CellId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: |
+        Stable and never reused. A retired cell keeps its id so history stays
+        addressable; the no-deletion rule is why this is a promise, not a
+        convention.
+      example: "cell_1790715944908"
+
+    Flavour:
+      type: string
+      enum: [polyformalism, runtime]
+      description: |
+        The two ecosystems, kept deliberately separate. They share the cell
+        doctrine and not the vocabulary, and conflating them is how a port ends up
+        claiming a capability one ecosystem never had.
+      example: polyformalism
+
+    LifecycleState:
+      type: string
+      enum: [Born, Active, Suspended, Terminated]
+      description: |
+        Born receives. Active receives. Suspended buffers without applying.
+        Terminated refuses. There is no fourth state and no way to skip one.
+
+    Opcode:
+      type: string
+      enum: [BIND, LINK, EFFECT, VIEW, TICK, FORGET, PROOF, ROUTE, CRDT, WORLD, TIME]
+      description: |
+        Six proved, five adopted. The distinction is load-bearing and is
+        carried in the operation descriptions rather than a second enum, because a
+        generator would flatten the difference and that is exactly the loss the
+        distinction exists to prevent.
+
+    Bottle:
+      type: object
+      required: [routing, payload]
+      description: |
+        A JSON envelope a router can read, wrapping a msgpack payload only the
+        target decodes. The split is the design: routing cost stays proportional to
+        the envelope, not the message.
+      properties:
+        routing:
+          $ref: '#/components/schemas/Envelope'
+        payload:
+          type: string
+          contentEncoding: base64
+          description: msgpack bytes. Opaque to every router.
+          example: "oWZoYWxsb2Fk"
+      additionalProperties: false
+
+    Envelope:
+      type: object
+      required: [version, dest, kind]
+      description: The only part a router reads.
+      properties:
+        version: { type: integer, const: 1 }
+        dest: { $ref: '#/components/schemas/CellId' }
+        kind: { type: string, maxLength: 64 }
+        payloadBytes: { type: integer, minimum: 0 }
+        integrity: { type: string, enum: [fnv1a-64, blake2b-256] }
+      additionalProperties: false
+
+    Cell:
+      type: object
+      required: [id, gamma, state, createdTick]
+      properties:
+        id: { $ref: '#/components/schemas/CellId' }
+        gamma: { $ref: '#/components/schemas/Ternary' }
+        state: { $ref: '#/components/schemas/LifecycleState' }
+        createdTick: { type: integer, minimum: 0 }
+        retiredAtTick:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: set by FORGET. The cell remains addressable afterwards.
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/CellId' }
+      additionalProperties: false
+
+    BindRequest:
+      type: object
+      required: [id, gamma]
+      properties:
+        id: { $ref: '#/components/schemas/CellId' }
+        gamma: { $ref: '#/components/schemas/Ternary' }
+      additionalProperties: false
+
+    Link:
+      type: object
+      required: [from, to]
+      description: Directed. An undirected link is two links, and saying so is cheaper than a flag.
+      properties:
+        from: { $ref: '#/components/schemas/CellId' }
+        to: { $ref: '#/components/schemas/CellId' }
+      additionalProperties: false
+
+    LinkRequest:
+      allOf:
+        - $ref: '#/components/schemas/Link'
+
+    TickRequest:
+      type: object
+      properties:
+        steps:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 1
+      additionalProperties: false
+
+    Receipt:
+      type: object
+      required: [op, cellId, tick, digest]
+      description: One witness record. Every mutation produces one, without exception.
+      properties:
+        op: { $ref: '#/components/schemas/Opcode' }
+        cellId: { $ref: '#/components/schemas/CellId' }
+        tick: { type: integer, minimum: 0 }
+        digest: { $ref: '#/components/schemas/Hash' }
+        prevDigest: { $ref: '#/components/schemas/Hash' }
+        note: { type: string, maxLength: 512 }
+      additionalProperties: false
+
+    Refusal:
+      type: object
+      required: [reason, gamma, eta, c]
+      description: |
+        A refusal is a receipt. Silence is not a refusal, and the difference is
+        what lets an auditor tell "nothing happened" from "something was tried
+        and did not pass".
+      properties:
+        reason:
+          type: string
+          enum: [conservation-violation, terminated, unknown-cell, suspended-buffered]
+        gamma: { $ref: '#/components/schemas/Ternary' }
+        eta: { $ref: '#/components/schemas/Ternary' }
+        c: { type: integer }
+        detail: { type: string, maxLength: 512 }
+      additionalProperties: false
+
+    Verdict:
+      type: object
+      required: [intact, firstBreak]
+      properties:
+        intact: { type: boolean }
+        firstBreak:
+          oneOf:
+            - { type: 'null' }
+            - { type: integer, minimum: 1 }
+          description: |
+            The id of the FIRST receipt that fails to chain, or null. First,
+            not a count — an auditor wants the earliest break.
+      additionalProperties: false
+
+    AnchoredHead:
+      type: object
+      required: [digest, anchoredAt, anchor]
+      properties:
+        digest: { $ref: '#/components/schemas/Hash' }
+        anchoredAt: { type: string, format: date-time }
+        anchor:
+          type: string
+          description: |
+            Where the anchor lives — a timestamp authority, immutable storage, a
+            transparency log. A value only helps if someone else holds it.
+      additionalProperties: false
+
+    Census:
+      type: object
+      required: [tick, cells, links]
+      properties:
+        tick: { type: integer, minimum: 0 }
+        cells: { type: integer, minimum: 0 }
+        links: { type: integer, minimum: 0 }
+        advanced: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    Canary:
+      type: object
+      required: [digest, fixture, algorithm, conformanceOnly]
+      properties:
+        digest:
+          type: string
+          const: "024a555471370b18d"
+        fixture: { type: string, const: "café Δ 日本語" }
+        algorithm: { type: string, const: "FNV-1a 64 over UTF-8 bytes" }
+        conformanceOnly: { type: boolean, const: true }
+        note:
+          type: string
+          description: |
+            Two things this does not tell you. FNV-1a is not collision
+            resistant, so it is a CONFORMANCE hash — good for proving two ports
+            agree, wrong for tamper evidence. And the accent is load-bearing:
+            the unaccented fixture is a different test that looks the same.
+      additionalProperties: false
+
+  responses:
+    NotFound:
+      description: no such cell
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
+    Conflict:
+      description: |
+        The cell id is already in use. Ids are never reused, so this is the
+        correct answer rather than a workaround.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
+    Refused:
+      description: the operation was refused, and the refusal is recorded
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Refusal' }
