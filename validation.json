@@ -1,0 +1,52 @@
+[
+ {
+  "check": "all 25 local $refs resolve",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "all 12 operations have an operationId",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "all 12 operations declare a 2xx response",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "operationIds are unique",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "no schema is declared but unreachable",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "canary digest is pinned by const",
+  "pass": true,
+  "detail": "024a555471370b18d"
+ },
+ {
+  "check": "the fixture is the ACCENTED one",
+  "pass": true,
+  "detail": "'caf\u00e9 \u0394 \u65e5\u672c\u8a9e'"
+ },
+ {
+  "check": "the spec says FNV is conformance-only, not tamper evidence",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "Ternary is exactly {-1,0,+1} with no default",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "check": "CellId states that ids are never reused",
+  "pass": true,
+  "detail": ""
+ }
+]
